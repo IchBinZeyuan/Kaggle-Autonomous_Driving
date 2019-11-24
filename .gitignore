@@ -1,0 +1,6 @@
+/Project/venv/
+/Project/task/model.pth
+venv/
+.venv
+.idea
+.DS_Store
