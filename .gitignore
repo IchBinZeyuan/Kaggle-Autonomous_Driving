@@ -4,3 +4,4 @@ venv/
 .venv
 .idea
 .DS_Store
+__init__.py

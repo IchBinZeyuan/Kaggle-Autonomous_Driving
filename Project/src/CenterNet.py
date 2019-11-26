@@ -27,7 +27,7 @@ class double_conv(nn.Module):
 
 
 class up(nn.Module):
-    def __init__(self, in_ch, out_ch, bilinear=True):
+    def __init__(self, in_ch, in_ch_2, out_ch, bilinear=True):
         super(up, self).__init__()
 
         #  would be a nice idea if the upsampling could be learned too,
@@ -35,9 +35,10 @@ class up(nn.Module):
         if bilinear:
             self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         else:
-            self.up = nn.ConvTranspose2d(in_ch // 2, in_ch // 2, 2, stride=2)
+            # self.up = nn.ConvTranspose2d(in_ch // 2, in_ch // 2, 2, stride=2)
+            self.up = nn.ConvTranspose2d(in_ch, in_ch, 2, stride=2)
 
-        self.conv = double_conv(in_ch, out_ch)
+        self.conv = double_conv(in_ch + in_ch_2, out_ch)
 
     def forward(self, x1, x2=None):
         x1 = self.up(x1)
@@ -48,7 +49,6 @@ class up(nn.Module):
 
         x1 = F.pad(x1, (diffX // 2, diffX - diffX // 2,
                         diffY // 2, diffY - diffY // 2))
-
         # for padding issues, see
         # https://github.com/HaiyongJiang/U-Net-Pytorch-Unstructured-Buggy/commit/0e854509c2cea854e247a9c615f175f76fbb2e3a
         # https://github.com/xiaopeng-liao/Pytorch-UNet/commit/8ebac70e633bac59fc22bb5195e513d5832fb3bd
@@ -69,7 +69,7 @@ class MyUNet(nn.Module):
         self._settings = settings
         self.device = self._settings.device
         #self.base_model = EfficientNet.from_pretrained('efficientnet-b0')
-        self.base_model = models.resnext101_32x8d(pretrained=True)
+        self.base_model = models.resnext101_32x8d(pretrained=False)
 
         self.conv0 = double_conv(5, 64)
         self.conv1 = double_conv(64, 128)
@@ -78,9 +78,10 @@ class MyUNet(nn.Module):
 
         self.mp = nn.MaxPool2d(2)
 
-        #self.up1 = up(1282 + 1024, 512)
-        self.up1 = up(2050 + 1024, 512)
-        self.up2 = up(512 + 512, 256)
+        # self.up1 = up(1282, 1024, 512, bilinear=False)
+        # self.up1 = up(2050 + 1024, 512, bilinear=False)
+        self.up1 = up(2050, 1024, 512, bilinear=False)
+        self.up2 = up(512, 512, 256, bilinear=False)
         self.outc = nn.Conv2d(256, n_classes, 1)
 
     def forward(self, x):
@@ -108,7 +109,6 @@ class MyUNet(nn.Module):
         # Add positional info
         mesh2 = self.get_mesh(batch_size, feats.shape[2], feats.shape[3])
         feats = torch.cat([feats, mesh2], 1)
-
         x = self.up1(feats, x4)
         x = self.up2(x, x3)
         x = self.outc(x)

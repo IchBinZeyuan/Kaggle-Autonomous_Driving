@@ -1,34 +1,31 @@
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import numpy as np
+import pandas as pd
 import cv2
 from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 from scipy.optimize import minimize
 from math import sin, cos
 import matplotlib.pyplot as plt
 import torch
+from termcolor import colored
 
 
-class DataLoading(Dataset):
+class DataProcessing(Dataset):
     def __init__(self, settings, dataframe, root_dir, transform=None, training=False):
         self._settings = settings
-        self.training = training
-        self.path = self._settings.path
-        self.camera_matrix = self.camera_matrix = np.array([[2304.5479, 0, 1686.2379],
-                                       [0, 2305.8757, 1354.9849],
-                                       [0, 0, 1]], dtype=np.float32)
-        self.IMG_WIDTH = self._settings.img_width
-        self.IMG_HEIGHT = self.IMG_WIDTH // 16 * 5
-        self.MODEL_SCALE = self._settings.model_scale
-        self.DISTANCE_THRESH_CLEAR = self._settings.distance_thresh_clear
-        self.IMG_SHAPE = None
-
         self.df = dataframe
         self.root_dir = root_dir
         self.transform = transform
-        self.training = self._settings.mode
         self.train_dataset = None
+
+        self.training = training
+        self.path = self._settings.path
+        self.camera_matrix = np.array([[2304.5479, 0, 1686.2379],
+                                       [0, 2305.8757, 1354.9849],
+                                       [0, 0, 1]], dtype=np.float32)
+        self.img_width = self._settings.img_width
+        self.img_height = self.img_width // 16 * 5
+        self.model_scale = self._settings.model_scale
 
         self.xzy_slope =None
 
@@ -45,7 +42,7 @@ class DataLoading(Dataset):
 
         # Augmentation
         flip = False
-        if self.training :
+        if self.training:
             flip = np.random.randint(10) == 1
 
         # Read image
@@ -62,7 +59,6 @@ class DataLoading(Dataset):
 
         return [img, mask, regr]
 
-
     def imread(self, path, fast_mode=False):
         img = cv2.imread(path)
         if not fast_mode and img is not None and len(img.shape) == 3:
@@ -74,24 +70,24 @@ class DataLoading(Dataset):
         bg = np.ones_like(img) * img.mean(1, keepdims=True).astype(img.dtype)
         bg = bg[:, :img.shape[1] // 6]
         img = np.concatenate([bg, img, bg], 1)
-        img = cv2.resize(img, (self.IMG_WIDTH, self.IMG_HEIGHT))
+        img = cv2.resize(img, (self.img_width, self.img_height))
         if flip:
             img = img[:, ::-1]
         return (img / 255).astype('float32')
 
     def get_mask_and_regr(self, img, labels, flip=False):
-        mask = np.zeros([self.IMG_HEIGHT // self.MODEL_SCALE, self.IMG_WIDTH // self.MODEL_SCALE], dtype='float32')
+        mask = np.zeros([self.img_height // self.model_scale, self.img_width // self.model_scale], dtype='float32')
         regr_names = ['x', 'y', 'z', 'yaw', 'pitch', 'roll']
-        regr = np.zeros([self.IMG_HEIGHT // self.MODEL_SCALE, self.IMG_WIDTH // self.MODEL_SCALE, 7], dtype='float32')
+        regr = np.zeros([self.img_height // self.model_scale, self.img_width // self.model_scale, 7], dtype='float32')
         coords = self.str2coords(labels)
         xs, ys = self.get_img_coords(labels)
         for x, y, regr_dict in zip(xs, ys, coords):
             x, y = y, x
-            x = (x - img.shape[0] // 2) * self.IMG_HEIGHT / (img.shape[0] // 2) / self.MODEL_SCALE
+            x = (x - img.shape[0] // 2) * self.img_height / (img.shape[0] // 2) / self.model_scale
             x = np.round(x).astype('int')
-            y = (y + img.shape[1] // 6) * self.IMG_WIDTH / (img.shape[1] * 4 / 3) / self.MODEL_SCALE
+            y = (y + img.shape[1] // 6) * self.img_width / (img.shape[1] * 4 / 3) / self.model_scale
             y = np.round(y).astype('int')
-            if x >= 0 and x < self.IMG_HEIGHT // self.MODEL_SCALE and y >= 0 and y < self.IMG_WIDTH // self.MODEL_SCALE:
+            if x >= 0 and x < self.img_height // self.model_scale and y >= 0 and y < self.img_width // self.model_scale:
                 mask[x, y] = 1
                 regr_dict = self._regr_preprocess(regr_dict, flip)
                 regr[x, y] = [regr_dict[n] for n in sorted(regr_dict)]
@@ -100,7 +96,8 @@ class DataLoading(Dataset):
             regr = np.array(regr[:, ::-1])
         return mask, regr
 
-    def str2coords(self, s, names=['id', 'yaw', 'pitch', 'roll', 'x', 'y', 'z']):
+    @staticmethod
+    def str2coords(s, names=['id', 'yaw', 'pitch', 'roll', 'x', 'y', 'z']):
         '''
         Input:
             s: PredictionString (e.g. from train dataframe)
@@ -176,7 +173,7 @@ class DataLoading(Dataset):
 
     def draw_points(self, image, points):
         for (p_x, p_y, p_z) in points:
-            cv2.circle(image, (p_x, p_y), int(1000 / p_z), (0, 255, 0), -1)
+            cv2.circle(image, (p_x, p_y), int(1000 / p_z), (0, 255, 0), -1)  # the car is far -> p_z large -> radius is small
         #         if p_x > image.shape[1] or p_y > image.shape[0]:
         #             print('Point', p_x, p_y, 'is out of image with shape', image.shape)
         return image
@@ -238,14 +235,16 @@ class DataLoading(Dataset):
             slope_err = (self.xzy_slope.predict([[xx, z]])[0] - y) ** 2
             x, y = self.convert_3d_to_2d(x, y, z0)
             y, x = x, y
-            x = (x - IMG_SHAPE[0] // 2) * self.IMG_HEIGHT / (IMG_SHAPE[0] // 2) / self.MODEL_SCALE
+            x = (x - IMG_SHAPE[0] // 2) * self.img_height / (IMG_SHAPE[0] // 2) / self.model_scale
             # x = np.round(x).astype('int')
-            y = (y + IMG_SHAPE[1] // 6) * self.IMG_WIDTH / (IMG_SHAPE[1] * 4 / 3) / self.MODEL_SCALE
+            y = (y + IMG_SHAPE[1] // 6) * self.img_width / (IMG_SHAPE[1] * 4 / 3) / self.model_scale
             # y = np.round(y).astype('int')
             # return (x - r) ** 2 + (y - c) ** 2
             return max(0.2, (x - r) ** 2 + (y - c) ** 2) + max(0.4, slope_err)
-
-        res = minimize(distance_fn, [x0, y0, z0], method='Powell')
+        # print(colored('Finding Minimize.....', 'red'))
+        # res = minimize(distance_fn, [x0, y0, z0], method='Powell')
+        res = minimize(distance_fn, [x0, y0, z0])
+        # print(colored('Minimization Done!', 'red'))
         x_new, y_new, z_new = res.x
         return x_new, y_new, z_new
 
@@ -255,7 +254,7 @@ class DataLoading(Dataset):
             for c2 in coords:
                 xyz2 = np.array([c2['x'], c2['y'], c2['z']])
                 distance = np.sqrt(((xyz1 - xyz2) ** 2).sum())
-                if distance < self.DISTANCE_THRESH_CLEAR:
+                if distance < self._settings.distance_thresh_clear:
                     if c1['confidence'] < c2['confidence']:
                         c1['confidence'] = -1
         return [c for c in coords if c['confidence'] > 0]
@@ -264,7 +263,6 @@ class DataLoading(Dataset):
         logits = prediction[0]
         regr_output = prediction[1:]
         points = np.argwhere(logits > 0)
-        #print('check points', points.shape)
         col_names = sorted(['x', 'y', 'z', 'yaw', 'pitch_sin', 'pitch_cos', 'roll'])
         coords = []
         for r, c in points:
@@ -274,10 +272,10 @@ class DataLoading(Dataset):
             coords[-1]['x'], coords[-1]['y'], coords[-1]['z'] = self.optimize_xy(r, c, coords[-1]['x'], coords[-1]['y'],
                                                                             coords[-1]['z'], flipped)
         coords = self.clear_duplicates(coords)
-        #print('check coords', coords)
         return coords
 
-    def coords2str(self, coords, names=['yaw', 'pitch', 'roll', 'x', 'y', 'z', 'confidence']):
+    @staticmethod
+    def coords2str(coords, names=['yaw', 'pitch', 'roll', 'x', 'y', 'z', 'confidence']):
         s = []
         for c in coords:
             for n in names:
@@ -292,35 +290,25 @@ class DataLoading(Dataset):
                 coords = self.str2coords(ps)
                 arr += [c[col] for c in coords]
             points_df[col] = arr
-
-        zy_slope = LinearRegression()
-        X = points_df[['z']]
-        y = points_df['y']
-        zy_slope.fit(X, y)
-        #  print('MAE without x:', mean_absolute_error(y, zy_slope.predict(X)))
-
-        # Will use this model later
         xzy_slope = LinearRegression()
         X = points_df[['x', 'z']]
         y = points_df['y']
+        print(colored('Fitting Linear Regression.......','red'))
         xzy_slope.fit(X, y)
-        #  print('MAE with x:', mean_absolute_error(y, xzy_slope.predict(X)))
-
+        print(colored('Finish Fitting Linear Regression!', 'red'))
+        # print('MAE with x:', mean_absolute_error(y, xzy_slope.predict(X)))
         # print('\ndy/dx = {:.3f}\ndy/dz = {:.3f}'.format(*xzy_slope.coef_))
         self.xzy_slope = xzy_slope
 
-    def show_result(self, idx, model, img, mask, regr, df_dev):
+    def show_result(self, idx, coords_true, coords_pred, df_dev):
         train_images_dir = self.path + 'train_images/{}.jpg'
-        output = model(torch.tensor(img[None]).to(self._settings.device)).data.cpu().numpy()
-        coords_pred = self.extract_coords(prediction=output[0])
-        #print('check point 1')
-        coords_true = self.extract_coords(prediction=np.concatenate([mask[None], regr], 0))
-
         img = self.imread(train_images_dir.format(df_dev['ImageId'].iloc[idx]))
-        #print('check point 2')
+        # plt.ion()
         fig, axes = plt.subplots(1, 2, figsize=(30, 30))
         axes[0].set_title('Ground truth')
         axes[0].imshow(self.visualize(img, coords_true))
         axes[1].set_title('Prediction')
         axes[1].imshow(self.visualize(img, coords_pred))
         plt.show()
+        # plt.pause(0.01)
+        # plt.clf()
