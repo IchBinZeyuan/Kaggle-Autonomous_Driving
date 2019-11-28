@@ -69,7 +69,7 @@ class MyUNet(nn.Module):
         self._settings = settings
         self.device = self._settings.device
         #self.base_model = EfficientNet.from_pretrained('efficientnet-b0')
-        self.base_model = models.resnext101_32x8d(pretrained=False)
+        self.base_model = models.resnext101_32x8d(pretrained=self._settings.pre_trained)
 
         self.conv0 = double_conv(5, 64)
         self.conv1 = double_conv(64, 128)
@@ -94,13 +94,10 @@ class MyUNet(nn.Module):
         x4 = self.mp(self.conv3(x3))
 
         x_center = x[:, :, :, self._settings.img_width // 8: -self._settings.img_width // 8]
-        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
-        # transform = transforms.Compose([normalize])
-        # x_center = transform(x_center)
+        # print('Shape of x_center:', x_center.shape)
         base_model = nn.Sequential(*list(self.base_model.children())[:-2])
         for param in base_model:
-            param.requires_grad = False
+            param.requires_grad = not self._settings.pre_trained
         feats = base_model(x_center)
         # feats = self.base_model.extract_features(x_center)
         bg = torch.zeros([feats.shape[0], feats.shape[1], feats.shape[2], feats.shape[3] // 8]).to(self.device)

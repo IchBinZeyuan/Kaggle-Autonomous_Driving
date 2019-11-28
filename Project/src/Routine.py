@@ -3,7 +3,6 @@ import pandas as pd  # data processing, CSV file I/O (e.g. pd.read_csv)
 from tqdm import tqdm  #_notebook as tqdm
 import matplotlib.pyplot as plt
 import gc
-import torchvision.transforms as transforms
 from sklearn.model_selection import train_test_split
 import torch
 import torch.optim as optim
@@ -14,7 +13,9 @@ from termcolor import colored
 from math import sqrt, acos, pi, sin, cos
 from scipy.spatial.transform import Rotation as R
 from sklearn.metrics import average_precision_score
-from multiprocessing import Pool
+import os
+from datetime import datetime
+
 
 class Routine(object):
     def __init__(self, settings, model):
@@ -27,11 +28,12 @@ class Routine(object):
         self.xzy_slope = None
 
     def run(self):
+        dir_name = self.make_log_dir()
         df_train, df_dev, df_test, train_loader, dev_loader, test_loader, train_dataset, dev_dataset, test_dataset = self.data_loading()
         self.show_image(train_dataset[0][0])
 
         model = self.Model(8, self._settings).to(self.device)
-        optimizer = optim.Adam(model.parameters(), lr=self._settings.lr)
+        optimizer = optim.Adam(model.parameters(), lr=self._settings.lr, weight_decay=self._settings.reg_factor)
         exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=max(self._settings.epoch, 10) * len(train_loader) // 3, gamma=0.1)
 
         history = pd.DataFrame()
@@ -39,22 +41,23 @@ class Routine(object):
             self.train_model(optimizer, model, exp_lr_scheduler, epoch, train_loader, history)
             self.evaluate_model(model, epoch, dev_loader, history)
         if self._settings.save_model:
-            torch.save(model.state_dict(), './model.pth')
-        # history['train_loss'].iloc[100:].plot()
+            torch.save(model.state_dict(), dir_name + '/model.pth')
+        history['train_loss'].iloc[100:].plot().get_figure().savefig(dir_name + '/train_loss.png')
+        plt.cla()
         series = history.dropna()['dev_loss']
         plt.scatter(series.index, series)
-
+        plt.savefig(dir_name + '/dev_loss.png')
         torch.cuda.empty_cache()
         gc.collect()
 
         dev_dataset.train_dataset = self.train_data
         dev_dataset.point_regr()
-        for idx in range(1):
+        for idx in range(5):
            img, mask, regr = dev_dataset[idx]
            output = model(torch.tensor(img[None]).to(self._settings.device)).data.cpu().numpy()
            coords_pred = dev_dataset.extract_coords(prediction=output[0])
            coords_true = dev_dataset.extract_coords(prediction=np.concatenate([mask[None], regr], 0))
-           dev_dataset.show_result(idx, coords_true, coords_pred, df_dev)
+           dev_dataset.show_result(idx, coords_true, coords_pred, df_dev, dir_name)
 
         predictions = []
         model.eval()
@@ -68,10 +71,11 @@ class Routine(object):
                 predictions.append(s)
         test = pd.read_csv(self.path + 'sample_submission.csv')
         test['PredictionString'] = predictions
-        test.to_csv('predictions.csv', index=False)
+        test.to_csv(dir_name + '/predictions.csv', index=False)
         test.head()
         # todo: fix bug in local metric calculation function
         # self.local_metric(test)
+        plt.show()
 
     def data_loading(self):
         train = pd.read_csv(self.path + 'train.csv')
@@ -88,9 +92,7 @@ class Routine(object):
         train_images_dir = self.path + 'train_images/{}.jpg'
         test_images_dir = self.path + 'test_images/{}.jpg'
         # Create dataset objects
-        # transform = transforms.Compose([transforms.ToTensor, transforms.Normalize(mean=[0.485, 0.456, 0.406],
-        #                                                                           std=[0.229, 0.224, 0.225])])
-        df_train, df_dev = train_test_split(train_data, test_size=0.1, random_state=42)
+        df_train, df_dev = train_test_split(train_data, test_size=self._settings.test_data_ratio, random_state=42)
         print(colored('Train Data Shape:', 'green'), df_train.shape)
         print(colored('Evaluation Data Shape:', 'green'), df_dev.shape)
         print(colored('Test Data Shape:', 'green'), df_test.shape)
@@ -104,20 +106,18 @@ class Routine(object):
         test_loader = DataLoader(dataset=test_dataset, batch_size=4, shuffle=False, num_workers=0)
         return df_train, df_dev, df_test, train_loader, dev_loader, test_loader, train_dataset, dev_dataset, test_dataset
 
-    def criterion(self, prediction, mask, regr, size_average=True):
+    def criterion(self, prediction, mask, regr, weight=0.4, size_average=True):
         # Binary mask loss
         pred_mask = torch.sigmoid(prediction[:, 0])
-        #     mask_loss = mask * (1 - pred_mask)**2 * torch.log(pred_mask + 1e-12) + (1 - mask) * pred_mask**2 * torch.log(1 - pred_mask + 1e-12)
         mask_loss = mask * torch.log(pred_mask + 1e-12) + (1 - mask) * torch.log(1 - pred_mask + 1e-12)
         mask_loss = -mask_loss.mean(0).sum()
-
         # Regression L1 loss
+        # todo: try l2 loss
         pred_regr = prediction[:, 1:]
         regr_loss = (torch.abs(pred_regr - regr).sum(1) * mask).sum(1).sum(1) / mask.sum(1).sum(1)
         regr_loss = regr_loss.mean(0)
-
         # Sum
-        loss = mask_loss + regr_loss
+        loss = weight * mask_loss + (1 - weight) * regr_loss
         if not size_average:
             loss *= prediction.shape[0]
         return loss
@@ -136,6 +136,7 @@ class Routine(object):
             loss.backward()
             optimizer.step()
             exp_lr_scheduler.step()
+        # todo: Using loss.data might be wrong!
         print('Train Epoch: {} \tLR: {:.6f}\tLoss: {:.6f}'.format(epoch, optimizer.state_dict()['param_groups'][0]['lr'], loss.data))
 
     def evaluate_model(self, model, epoch, dev_loader, history=None):
@@ -287,3 +288,11 @@ class Routine(object):
         plt.show()
         # plt.pause(0.01)
         # plt.clf()
+
+    def make_log_dir(self):
+        now = datetime.now()
+        dt_string = now.strftime("%Y_%m_%d_%H_%M_%S")
+        repository_name = self._settings.log_path + dt_string + '_' + str(self._settings.batch_size)
+        os.makedirs(repository_name)
+        return repository_name
+

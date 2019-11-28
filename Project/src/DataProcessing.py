@@ -8,6 +8,7 @@ from math import sin, cos
 import matplotlib.pyplot as plt
 import torch
 from termcolor import colored
+import torchvision.transforms as transforms
 
 
 class DataProcessing(Dataset):
@@ -73,7 +74,15 @@ class DataProcessing(Dataset):
         img = cv2.resize(img, (self.img_width, self.img_height))
         if flip:
             img = img[:, ::-1]
-        return (img / 255).astype('float32')
+
+        mean = [0.485, 0.456, 0.406]
+        std = [0.229, 0.224, 0.225]
+        img = (img / 255).astype('float32')
+        for i in range(3):
+            m = np.mean(img[:, :, i])
+            s = np.std(img[:, :, i])
+            img[:, :, i] = ((img[:, :, i] - m) * std[i] / s + mean[i]).astype('float32')
+        return img
 
     def get_mask_and_regr(self, img, labels, flip=False):
         mask = np.zeros([self.img_height // self.model_scale, self.img_width // self.model_scale], dtype='float32')
@@ -300,15 +309,12 @@ class DataProcessing(Dataset):
         # print('\ndy/dx = {:.3f}\ndy/dz = {:.3f}'.format(*xzy_slope.coef_))
         self.xzy_slope = xzy_slope
 
-    def show_result(self, idx, coords_true, coords_pred, df_dev):
+    def show_result(self, idx, coords_true, coords_pred, df_dev, dir_name):
         train_images_dir = self.path + 'train_images/{}.jpg'
         img = self.imread(train_images_dir.format(df_dev['ImageId'].iloc[idx]))
-        # plt.ion()
         fig, axes = plt.subplots(1, 2, figsize=(30, 30))
         axes[0].set_title('Ground truth')
         axes[0].imshow(self.visualize(img, coords_true))
         axes[1].set_title('Prediction')
         axes[1].imshow(self.visualize(img, coords_pred))
-        plt.show()
-        # plt.pause(0.01)
-        # plt.clf()
+        plt.savefig(dir_name + idx + '_result.png')
