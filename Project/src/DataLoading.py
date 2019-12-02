@@ -3,6 +3,10 @@ import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 import cv2
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error
+from skimage.filters import gaussian
+from skimage.exposure import rescale_intensity
+from skimage.util import random_noise
+from sklearn.metrics import mean_absolute_error, mean_squared_error
 from scipy.optimize import minimize
 from math import sin, cos
 
@@ -21,6 +25,8 @@ class DataLoading(object):
         self.MODEL_SCALE = self._settings.model_scale
         self.DISTANCE_THRESH_CLEAR = self._settings.distance_thresh_clear
         self.IMG_SHAPE = None
+        self.noivar = 0.5
+        self.blursigma = 5
 
         self.df = dataframe
         self.root_dir = root_dir
@@ -87,10 +93,10 @@ class DataLoading(object):
             img = img[:,::-1]
             return (img / 255).astype('float32')
         if noise:
-            img = random_noise(img, mode='gaussian', var=0.5)
+            img = random_noise(img, mode='gaussian', var=self.noivar)
         if blur:
             is_colour = len(img.shape) == 3
-            img = rescale_intensity(gaussian(img, sigma=5, multichannel=is_colour))
+            img = rescale_intensity(gaussian(img, sigma=self.blursigma, multichannel=is_colour))
         return img
 
     def get_mask_and_regr(self, img, labels, flip=False):
