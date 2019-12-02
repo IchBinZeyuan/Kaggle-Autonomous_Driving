@@ -41,12 +41,14 @@ class DataLoading(object):
 
         # Augmentation
         flip = False
+        noise = False
+        blur = False
         if self.training == 'TRAINING':
             flip = np.random.randint(10) == 1
 
         # Read image
         img0 = self.imread(img_name, True)
-        img = self.preprocess_image(img0, flip=flip)
+        img = self.preprocess_image(img0, flip = flip, noise = noise, blur = blur)
         img = np.rollaxis(img, 2, 0)
 
         # Get mask and regression maps
@@ -75,15 +77,21 @@ class DataLoading(object):
             img = np.array(img[:, :, ::-1])  # inverse load image
         return img
 
-    def preprocess_image(self, img, flip=False):
+    def preprocess_image(img, flip = False, noise = False, blur = False):
         img = img[img.shape[0] // 2:]
         bg = np.ones_like(img) * img.mean(1, keepdims=True).astype(img.dtype)
         bg = bg[:, :img.shape[1] // 6]
         img = np.concatenate([bg, img, bg], 1)
-        img = cv2.resize(img, (self.IMG_WIDTH, self.IMG_HEIGHT))
+        img = cv2.resize(img, (IMG_WIDTH, IMG_HEIGHT))
         if flip:
-            img = img[:, ::-1]
-        return (img / 255).astype('float32')
+            img = img[:,::-1]
+            return (img / 255).astype('float32')
+        if noise:
+            img = random_noise(img, mode='gaussian', var=0.5)
+        if blur:
+            is_colour = len(img.shape) == 3
+            img = rescale_intensity(gaussian(img, sigma=5, multichannel=is_colour))
+        return img
 
     def get_mask_and_regr(self, img, labels, flip=False):
         mask = np.zeros([self.IMG_HEIGHT // self.MODEL_SCALE, self.IMG_WIDTH // self.MODEL_SCALE], dtype='float32')
