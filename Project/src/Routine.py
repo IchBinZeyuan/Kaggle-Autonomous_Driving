@@ -31,10 +31,9 @@ class Routine(object):
         dir_name = self.make_log_dir()
         df_train, df_dev, df_test, train_loader, dev_loader, test_loader, train_dataset, dev_dataset, test_dataset = self.data_loading()
         self.show_image(train_dataset[0][0])
-
         model = self.Model(8, self._settings).to(self.device)
         optimizer = optim.Adam(model.parameters(), lr=self._settings.lr, weight_decay=self._settings.reg_factor)
-        exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=max(self._settings.epoch, 10) * len(train_loader) // 3, gamma=0.1)
+        exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=self._settings.lr_decay_epoch * len(train_loader), gamma=0.1)
 
         history = pd.DataFrame()
         for epoch in range(self._settings.epoch):
@@ -69,7 +68,8 @@ class Routine(object):
                 coords = dev_dataset.extract_coords(out)
                 s = self.data_loader.coords2str(coords)
                 predictions.append(s)
-        test = pd.read_csv(self.path + 'sample_submission.csv')
+
+        test = pd.read_csv(self.path + 'sample_submission.csv', nrows=getattr(self._settings, 'nrof_test_data', None))
         test['PredictionString'] = predictions
         test.to_csv(dir_name + '/predictions.csv', index=False)
         test.head()
@@ -80,7 +80,7 @@ class Routine(object):
     def data_loading(self):
         train = pd.read_csv(self.path + 'train.csv')
         print(colored('Original Train Data Shape:', 'green'), train.shape)
-        test = pd.read_csv(self.path + 'sample_submission.csv')
+        test = pd.read_csv(self.path + 'sample_submission.csv', nrows=getattr(self._settings, 'nrof_test_data', None))
         print(colored('Original Test Train Data Shape:', 'green'), test.shape)
         camera_matrix = np.array([[2304.5479, 0, 1686.2379],
                                        [0, 2305.8757, 1354.9849],
@@ -92,11 +92,11 @@ class Routine(object):
         train_images_dir = self.path + 'train_images/{}.jpg'
         test_images_dir = self.path + 'test_images/{}.jpg'
         # Create dataset objects
-        df_train, df_dev = train_test_split(train_data, test_size=self._settings.test_data_ratio, random_state=42)
+        df_train, df_dev = train_test_split(train_data, test_size=self._settings.validation_data_ratio, random_state=6)
         print(colored('Train Data Shape:', 'green'), df_train.shape)
         print(colored('Evaluation Data Shape:', 'green'), df_dev.shape)
         print(colored('Test Data Shape:', 'green'), df_test.shape)
-        train_dataset = self.data_loader(self._settings, df_train, train_images_dir, training=True)
+        train_dataset = self.data_loader(self._settings, df_train, train_images_dir, data_agument=self._settings.data_agument, training=True)
         dev_dataset = self.data_loader(self._settings, df_dev, train_images_dir, training=False)
         test_dataset = self.data_loader(self._settings, df_test, test_images_dir, training=False)
 
@@ -124,6 +124,7 @@ class Routine(object):
 
     def train_model(self, optimizer, model, exp_lr_scheduler, epoch, train_loader, history=None):
         model.train()
+        total_loss = 0
         for batch_idx, (img_batch, mask_batch, regr_batch) in enumerate(tqdm(train_loader)):
             img_batch = img_batch.to(self.device)
             mask_batch = mask_batch.to(self.device)
@@ -131,13 +132,13 @@ class Routine(object):
             optimizer.zero_grad()
             output = model(img_batch)
             loss = self.criterion(output, mask_batch, regr_batch)
+            total_loss += loss.data
             if history is not None:
                 history.loc[epoch + batch_idx / len(train_loader), 'train_loss'] = loss.data.cpu().numpy()
             loss.backward()
             optimizer.step()
             exp_lr_scheduler.step()
-        # todo: Using loss.data might be wrong!
-        print('Train Epoch: {} \tLR: {:.6f}\tLoss: {:.6f}'.format(epoch, optimizer.state_dict()['param_groups'][0]['lr'], loss.data))
+        print('Train Epoch: {} \tLR: {:.6f}\tLoss: {:.6f}'.format(epoch, optimizer.state_dict()['param_groups'][0]['lr'], total_loss/len(train_loader.dataset)))
 
     def evaluate_model(self, model, epoch, dev_loader, history=None):
         model.eval()

@@ -2,6 +2,9 @@ import numpy as np
 import pandas as pd
 import cv2
 from sklearn.linear_model import LinearRegression
+from skimage.filters import gaussian
+from skimage.exposure import rescale_intensity
+from skimage.util import random_noise
 from torch.utils.data import Dataset
 from scipy.optimize import minimize
 from math import sin, cos
@@ -12,11 +15,11 @@ import torchvision.transforms as transforms
 
 
 class DataProcessing(Dataset):
-    def __init__(self, settings, dataframe, root_dir, transform=None, training=False):
+    def __init__(self, settings, dataframe, root_dir, data_agument=None, training=False):
         self._settings = settings
         self.df = dataframe
         self.root_dir = root_dir
-        self.transform = transform
+        self.data_agument = data_agument
         self.train_dataset = None
 
         self.training = training
@@ -41,16 +44,9 @@ class DataProcessing(Dataset):
         idx, labels = self.df.values[idx]
         img_name = self.root_dir.format(idx)
 
-        # Augmentation
-        flip = False
-        if self.training:
-            flip = np.random.randint(10) == 1
-
         # Read image
         img0 = self.imread(img_name, True)
-        if self.transform:
-            img0 = self.transform(img0)
-        img = self.preprocess_image(img0, flip=flip)
+        img = self.preprocess_image(img0, data_agument=self.data_agument)
 
         img = np.rollaxis(img, 2, 0)
 
@@ -66,14 +62,20 @@ class DataProcessing(Dataset):
             img = np.array(img[:, :, ::-1])  # inverse load image
         return img
 
-    def preprocess_image(self, img, flip=False):
+    def preprocess_image(self, img, data_agument=[]):
         img = img[img.shape[0] // 2:]
         bg = np.ones_like(img) * img.mean(1, keepdims=True).astype(img.dtype)
         bg = bg[:, :img.shape[1] // 6]
         img = np.concatenate([bg, img, bg], 1)
         img = cv2.resize(img, (self.img_width, self.img_height))
-        if flip:
-            img = img[:, ::-1]
+        if self.training:
+            ratio = 1 // self._settings.data_agument_ratio
+            if np.random.randint(ratio) == 0 and 'flip' in data_agument:
+                img = img[:, ::-1]
+            if np.random.randint(ratio * 2) == 0 and 'noise' in data_agument:
+                img = random_noise(img, mode='gaussian', var=0.005)  # var default is 0.01
+            if np.random.randint(ratio * 2) == 0 and 'blur' in data_agument:
+                img = rescale_intensity(gaussian(img, sigma=1, multichannel=True))
 
         mean = [0.485, 0.456, 0.406]
         std = [0.229, 0.224, 0.225]
@@ -120,6 +122,14 @@ class DataProcessing(Dataset):
             if 'id' in coords[-1]:
                 coords[-1]['id'] = int(coords[-1]['id'])  # change id to int dtype
         return coords
+
+    @staticmethod
+    def coords2str(coords, names=['yaw', 'pitch', 'roll', 'x', 'y', 'z', 'confidence']):
+        s = []
+        for c in coords:
+            for n in names:
+                s.append(str(c.get(n, 0)))
+        return ' '.join(s)
 
     def get_img_coords(self, s):
         '''
@@ -283,14 +293,6 @@ class DataProcessing(Dataset):
         coords = self.clear_duplicates(coords)
         return coords
 
-    @staticmethod
-    def coords2str(coords, names=['yaw', 'pitch', 'roll', 'x', 'y', 'z', 'confidence']):
-        s = []
-        for c in coords:
-            for n in names:
-                s.append(str(c.get(n, 0)))
-        return ' '.join(s)
-
     def point_regr(self):
         points_df = pd.DataFrame()
         for col in ['x', 'y', 'z', 'yaw', 'pitch', 'roll']:
@@ -302,7 +304,7 @@ class DataProcessing(Dataset):
         xzy_slope = LinearRegression()
         X = points_df[['x', 'z']]
         y = points_df['y']
-        print(colored('Fitting Linear Regression.......','red'))
+        print(colored('Fitting Linear Regression.......', 'red'))
         xzy_slope.fit(X, y)
         print(colored('Finish Fitting Linear Regression!', 'red'))
         # print('MAE with x:', mean_absolute_error(y, xzy_slope.predict(X)))
@@ -317,4 +319,4 @@ class DataProcessing(Dataset):
         axes[0].imshow(self.visualize(img, coords_true))
         axes[1].set_title('Prediction')
         axes[1].imshow(self.visualize(img, coords_pred))
-        plt.savefig(dir_name + idx + '_result.png')
+        plt.savefig(dir_name + '/' + str(idx) + '_result.png')

@@ -29,30 +29,23 @@ class double_conv(nn.Module):
 class up(nn.Module):
     def __init__(self, in_ch, in_ch_2, out_ch, bilinear=True):
         super(up, self).__init__()
-
-        #  would be a nice idea if the upsampling could be learned too,
-        #  but my machine do not have enough memory to handle all those weights
         if bilinear:
             self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         else:
             # self.up = nn.ConvTranspose2d(in_ch // 2, in_ch // 2, 2, stride=2)
             self.up = nn.ConvTranspose2d(in_ch, in_ch, 2, stride=2)
-
         self.conv = double_conv(in_ch + in_ch_2, out_ch)
 
     def forward(self, x1, x2=None):
         x1 = self.up(x1)
-
         # input is CHW
         diffY = x2.size()[2] - x1.size()[2]
         diffX = x2.size()[3] - x1.size()[3]
-
         x1 = F.pad(x1, (diffX // 2, diffX - diffX // 2,
                         diffY // 2, diffY - diffY // 2))
         # for padding issues, see
         # https://github.com/HaiyongJiang/U-Net-Pytorch-Unstructured-Buggy/commit/0e854509c2cea854e247a9c615f175f76fbb2e3a
         # https://github.com/xiaopeng-liao/Pytorch-UNet/commit/8ebac70e633bac59fc22bb5195e513d5832fb3bd
-
         if x2 is not None:
             x = torch.cat([x2, x1], dim=1)
         else:
@@ -94,7 +87,7 @@ class MyUNet(nn.Module):
         x4 = self.mp(self.conv3(x3))
 
         x_center = x[:, :, :, self._settings.img_width // 8: -self._settings.img_width // 8]
-        # print('Shape of x_center:', x_center.shape)
+        x_center_size = x_center.size()
         base_model = nn.Sequential(*list(self.base_model.children())[:-2])
         for param in base_model:
             param.requires_grad = not self._settings.pre_trained
