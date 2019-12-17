@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import math
 import cv2
 from sklearn.linear_model import LinearRegression
 from skimage.filters import gaussian
@@ -11,7 +12,6 @@ from math import sin, cos
 import matplotlib.pyplot as plt
 import torch
 from termcolor import colored
-import torchvision.transforms as transforms
 
 
 class DataProcessing(Dataset):
@@ -43,35 +43,45 @@ class DataProcessing(Dataset):
         # Get image name
         idx, labels = self.df.values[idx]
         img_name = self.root_dir.format(idx)
+        mask_name = img_name.replace('images', 'masks')
 
         # Read image
-        img0 = self.imread(img_name, True)
-        img = self.preprocess_image(img0, data_agument=self.data_agument)
+        img0 = self.imread(img_name, is_color=True, fast_mode=True)
+        mask = self.imread(mask_name, is_color=False, fast_mode=True)
+        try:
+            imagemaskinv = cv2.bitwise_not(mask)
+            img = cv2.bitwise_and(img0, img0, mask=imagemaskinv)
+        except:
+            img = img0
+        img, flip = self.preprocess_image(img, data_agument=self.data_agument)
 
         img = np.rollaxis(img, 2, 0)
 
         # Get mask and regression maps
-        mask, regr = self.get_mask_and_regr(img0, labels, flip=False)
+        mask, regr = self.get_mask_and_regr(img0, labels, flip=flip)
         regr = np.rollaxis(regr, 2, 0)
 
         return [img, mask, regr]
 
-    def imread(self, path, fast_mode=False):
-        img = cv2.imread(path)
+    def imread(self, path, is_color=True, fast_mode=False):
+        img = cv2.imread(path, is_color)
         if not fast_mode and img is not None and len(img.shape) == 3:
             img = np.array(img[:, :, ::-1])  # inverse load image
         return img
 
     def preprocess_image(self, img, data_agument=[]):
         img = img[img.shape[0] // 2:]
-        bg = np.ones_like(img) * img.mean(1, keepdims=True).astype(img.dtype)
-        bg = bg[:, :img.shape[1] // 6]
-        img = np.concatenate([bg, img, bg], 1)
+        # bg = np.ones_like(img) * img.mean(1, keepdims=True).astype(img.dtype)
+        # bg = bg[:, :img.shape[1] // 6]
+        # img = np.concatenate([bg, img, bg], 1)
         img = cv2.resize(img, (self.img_width, self.img_height))
+        flip = False
         if self.training:
+            np.random.seed(0)
             ratio = 1 // self._settings.data_agument_ratio
             if np.random.randint(ratio) == 0 and 'flip' in data_agument:
                 img = img[:, ::-1]
+                flip = True
             if np.random.randint(ratio * 2) == 0 and 'noise' in data_agument:
                 img = random_noise(img, mode='gaussian', var=0.005)  # var default is 0.01
             if np.random.randint(ratio * 2) == 0 and 'blur' in data_agument:
@@ -84,28 +94,48 @@ class DataProcessing(Dataset):
             m = np.mean(img[:, :, i])
             s = np.std(img[:, :, i])
             img[:, :, i] = ((img[:, :, i] - m) * std[i] / s + mean[i]).astype('float32')
-        return img
+        return img, flip
 
     def get_mask_and_regr(self, img, labels, flip=False):
-        mask = np.zeros([self.img_height // self.model_scale, self.img_width // self.model_scale], dtype='float32')
+        """
+        Get classification mask and regression values
+        :param img: original image
+        :param labels: prediction string
+        :param flip: if flip image or not
+        :return:
+        """
+        sigma = 0.5
         regr_names = ['x', 'y', 'z', 'yaw', 'pitch', 'roll']
         regr = np.zeros([self.img_height // self.model_scale, self.img_width // self.model_scale, 7], dtype='float32')
         coords = self.str2coords(labels)
         xs, ys = self.get_img_coords(labels)
+        heatmap = np.zeros([self.img_height // self.model_scale, self.img_width // self.model_scale], dtype='float32')
+
         for x, y, regr_dict in zip(xs, ys, coords):
             x, y = y, x
             x = (x - img.shape[0] // 2) * self.img_height / (img.shape[0] // 2) / self.model_scale
             x = np.round(x).astype('int')
-            y = (y + img.shape[1] // 6) * self.img_width / (img.shape[1] * 4 / 3) / self.model_scale
+            # y = (y + img.shape[1] // 6) * self.img_width / (img.shape[1] * 4 / 3) / self.model_scale
+            y = y * self.img_width / img.shape[1] / self.model_scale
             y = np.round(y).astype('int')
+            X1 = np.linspace(1, self.img_width // self.model_scale, self.img_width // self.model_scale)
+            Y1 = np.linspace(1, self.img_height // self.model_scale, self.img_height // self.model_scale)
+            [X, Y] = np.meshgrid(X1, Y1)
+            X = X - math.floor(y) - 1
+            Y = Y - math.floor(x) - 1
+            D2 = X * X + Y * Y
+            E2 = 2.0 * sigma ** 2
+            Exponent = D2 / E2
+            heatmap_ = np.exp(-Exponent)
+            heatmap_ = heatmap_[:, :]
+            heatmap[:, :] = np.maximum(heatmap[:, :], heatmap_[:, :])
             if x >= 0 and x < self.img_height // self.model_scale and y >= 0 and y < self.img_width // self.model_scale:
-                mask[x, y] = 1
                 regr_dict = self._regr_preprocess(regr_dict, flip)
                 regr[x, y] = [regr_dict[n] for n in sorted(regr_dict)]
         if flip:
-            mask = np.array(mask[:, ::-1])
+            heatmap = np.array(heatmap[:, ::-1])
             regr = np.array(regr[:, ::-1])
-        return mask, regr
+        return heatmap, regr
 
     @staticmethod
     def str2coords(s, names=['id', 'yaw', 'pitch', 'roll', 'x', 'y', 'z']):
@@ -114,7 +144,7 @@ class DataProcessing(Dataset):
             s: PredictionString (e.g. from train dataframe)
             names: array of what to extract from the string
         Output:
-            list of dicts with keys from `names`
+            list of dicts with keys from `names` : [['id':, 'yaw':, ...], [],...[]]
         '''
         coords = []
         for l in np.array(s.split()).reshape([-1, 7]):
@@ -132,12 +162,13 @@ class DataProcessing(Dataset):
         return ' '.join(s)
 
     def get_img_coords(self, s):
-        '''
-        Input is a PredictionString (e.g. from train dataframe)
-        Output is two arrays:
+        """
+        Convert world coordinates to pixel coordinates
+        :param s: Input is a PredictionString (e.g. from train dataframe)
+        :return: Output is two arrays:
             xs: x coordinates in the image
             ys: y coordinates in the image
-        '''
+        """
         coords = self.str2coords(s)
         xs = [c['x'] for c in coords]
         ys = [c['y'] for c in coords]
@@ -152,6 +183,12 @@ class DataProcessing(Dataset):
         return img_xs, img_ys
 
     def _regr_preprocess(self, regr_dict, flip=False):
+        """
+
+        :param regr_dict:
+        :param flip:
+        :return: regr_dict.keys() = roll, pitch_sin, pitch_cos, x, y, z
+        """
         if flip:
             for k in ['x', 'pitch', 'roll']:
                 regr_dict[k] = -regr_dict[k]
@@ -198,11 +235,9 @@ class DataProcessing(Dataset):
         return image
 
     def visualize(self, img, coords):
-        # You will also need functions from the previous cells
         x_l = 1.02
         y_l = 0.80
         z_l = 2.31
-
         img = img.copy()
         for point in coords:
             # Get values
@@ -256,13 +291,14 @@ class DataProcessing(Dataset):
             y, x = x, y
             x = (x - IMG_SHAPE[0] // 2) * self.img_height / (IMG_SHAPE[0] // 2) / self.model_scale
             # x = np.round(x).astype('int')
-            y = (y + IMG_SHAPE[1] // 6) * self.img_width / (IMG_SHAPE[1] * 4 / 3) / self.model_scale
+            # y = (y + IMG_SHAPE[1] // 6) * self.img_width / (IMG_SHAPE[1] * 4 / 3) / self.model_scale
+            y = y * self.img_width / IMG_SHAPE[1] / self.model_scale
             # y = np.round(y).astype('int')
             # return (x - r) ** 2 + (y - c) ** 2
             return max(0.2, (x - r) ** 2 + (y - c) ** 2) + max(0.4, slope_err)
         # print(colored('Finding Minimize.....', 'red'))
         # res = minimize(distance_fn, [x0, y0, z0], method='Powell')
-        res = minimize(distance_fn, [x0, y0, z0])
+        res = minimize(distance_fn, [x0, y0, z0], method='Powell')
         # print(colored('Minimization Done!', 'red'))
         x_new, y_new, z_new = res.x
         return x_new, y_new, z_new
@@ -281,15 +317,16 @@ class DataProcessing(Dataset):
     def extract_coords(self, prediction, flipped=False):
         logits = prediction[0]
         regr_output = prediction[1:]
-        points = np.argwhere(logits > 0)
+        points = np.argwhere(logits > 0.3)
         col_names = sorted(['x', 'y', 'z', 'yaw', 'pitch_sin', 'pitch_cos', 'roll'])
         coords = []
-        for r, c in points:
+        for r, c in points:  # r, c is coordinate where logits is larger than 0
             regr_dict = dict(zip(col_names, regr_output[:, r, c]))
             coords.append(self._regr_back(regr_dict))
             coords[-1]['confidence'] = 1 / (1 + np.exp(-logits[r, c]))
-            coords[-1]['x'], coords[-1]['y'], coords[-1]['z'] = self.optimize_xy(r, c, coords[-1]['x'], coords[-1]['y'],
-                                                                            coords[-1]['z'], flipped)
+            if self._settings.optimize_coordinate:
+                coords[-1]['x'], coords[-1]['y'], coords[-1]['z'] = self.optimize_xy(r, c, coords[-1]['x'], coords[-1]['y'],
+                                                                                coords[-1]['z'], flipped)
         coords = self.clear_duplicates(coords)
         return coords
 

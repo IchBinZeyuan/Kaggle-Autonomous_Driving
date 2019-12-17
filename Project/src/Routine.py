@@ -15,6 +15,7 @@ from scipy.spatial.transform import Rotation as R
 from sklearn.metrics import average_precision_score
 import os
 from datetime import datetime
+import cv2
 
 
 class Routine(object):
@@ -31,6 +32,22 @@ class Routine(object):
         dir_name = self.make_log_dir()
         df_train, df_dev, df_test, train_loader, dev_loader, test_loader, train_dataset, dev_dataset, test_dataset = self.data_loading()
         self.show_image(train_dataset[0][0])
+        self.show_image(train_dataset[0][1])
+        self.show_image(train_dataset[0][2])
+
+        # for idx in range(2):
+        #     fig, axes = plt.subplots(1, 2, figsize=(20, 20))
+        #     for ax_i in range(2):
+        #         img, mask, regr = dev_dataset[idx]
+        #         coords = dev_dataset.extract_coords(np.concatenate([mask[None], regr], 0), ax_i == 1) #  mask[None] == np.newaxis
+        #         train_images_dir = self.path + 'train_images/{}.jpg'
+        #         img = dev_dataset.imread(train_images_dir.format(df_dev['ImageId'].iloc[idx]))
+        #         if ax_i == 1:
+        #             img = img[:, ::-1]
+        #         axes[ax_i].set_title('Flip = {}'.format(ax_i == 1))
+        #         axes[ax_i].imshow(dev_dataset.visualize(img, coords))
+        #     plt.show()
+
         model = self.Model(8, self._settings).to(self.device)
         optimizer = optim.Adam(model.parameters(), lr=self._settings.lr, weight_decay=self._settings.reg_factor)
         exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=self._settings.lr_decay_epoch * len(train_loader), gamma=0.1)
@@ -284,7 +301,12 @@ class Routine(object):
         plt.figure()
         plt.title('processed image')
         img = image
-        img = np.rollaxis(img, 0, 3)
+        if len(img.shape) == 3:
+            if img.shape[0] == 3:
+                img = np.rollaxis(img, 0, 3)
+            else:
+                img = img[0, :, :]
+
         plt.imshow(img)
         plt.show()
         # plt.pause(0.01)
