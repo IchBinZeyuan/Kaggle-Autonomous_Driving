@@ -57,11 +57,11 @@ class DataProcessing(Dataset):
 
         img = np.rollaxis(img, 2, 0)
 
-        # Get mask and regression maps
-        mask, regr = self.get_mask_and_regr(img0, labels, flip=flip)
+        # Get heatmap and regression maps
+        heatmap, regr = self.get_mask_and_regr(img0, labels, flip=flip)
         regr = np.rollaxis(regr, 2, 0)
 
-        return [img, mask, regr]
+        return [img, heatmap, regr]
 
     def imread(self, path, is_color=True, fast_mode=False):
         img = cv2.imread(path, is_color)
@@ -71,13 +71,13 @@ class DataProcessing(Dataset):
 
     def preprocess_image(self, img, data_agument=[]):
         img = img[img.shape[0] // 2:]
-        # bg = np.ones_like(img) * img.mean(1, keepdims=True).astype(img.dtype)
-        # bg = bg[:, :img.shape[1] // 6]
-        # img = np.concatenate([bg, img, bg], 1)
+        bg = np.ones_like(img) * img.mean(1, keepdims=True).astype(img.dtype)
+        bg = bg[:, :img.shape[1] // 6]
+        img = np.concatenate([bg, img, bg], 1)
         img = cv2.resize(img, (self.img_width, self.img_height))
         flip = False
         if self.training:
-            np.random.seed(0)
+            np.random.seed(1)
             ratio = 1 // self._settings.data_agument_ratio
             if np.random.randint(ratio) == 0 and 'flip' in data_agument:
                 img = img[:, ::-1]
@@ -104,7 +104,8 @@ class DataProcessing(Dataset):
         :param flip: if flip image or not
         :return:
         """
-        sigma = 0.5
+        sigma = 0.8
+        mask = np.zeros([self.img_height // self.model_scale, self.img_width // self.model_scale], dtype='float32')
         regr_names = ['x', 'y', 'z', 'yaw', 'pitch', 'roll']
         regr = np.zeros([self.img_height // self.model_scale, self.img_width // self.model_scale, 7], dtype='float32')
         coords = self.str2coords(labels)
@@ -115,8 +116,7 @@ class DataProcessing(Dataset):
             x, y = y, x
             x = (x - img.shape[0] // 2) * self.img_height / (img.shape[0] // 2) / self.model_scale
             x = np.round(x).astype('int')
-            # y = (y + img.shape[1] // 6) * self.img_width / (img.shape[1] * 4 / 3) / self.model_scale
-            y = y * self.img_width / img.shape[1] / self.model_scale
+            y = (y + img.shape[1] // 6) * self.img_width / (img.shape[1] * 4 / 3) / self.model_scale
             y = np.round(y).astype('int')
             X1 = np.linspace(1, self.img_width // self.model_scale, self.img_width // self.model_scale)
             Y1 = np.linspace(1, self.img_height // self.model_scale, self.img_height // self.model_scale)
@@ -124,7 +124,7 @@ class DataProcessing(Dataset):
             X = X - math.floor(y) - 1
             Y = Y - math.floor(x) - 1
             D2 = X * X + Y * Y
-            E2 = 2.0 * sigma ** 2
+            E2 = 2 * sigma ** 2
             Exponent = D2 / E2
             heatmap_ = np.exp(-Exponent)
             heatmap_ = heatmap_[:, :]
@@ -132,9 +132,11 @@ class DataProcessing(Dataset):
             if x >= 0 and x < self.img_height // self.model_scale and y >= 0 and y < self.img_width // self.model_scale:
                 regr_dict = self._regr_preprocess(regr_dict, flip)
                 regr[x, y] = [regr_dict[n] for n in sorted(regr_dict)]
+                mask[x, y] = 1
         if flip:
             heatmap = np.array(heatmap[:, ::-1])
             regr = np.array(regr[:, ::-1])
+            mask = np.array(mask[:, ::-1])
         return heatmap, regr
 
     @staticmethod
@@ -291,8 +293,8 @@ class DataProcessing(Dataset):
             y, x = x, y
             x = (x - IMG_SHAPE[0] // 2) * self.img_height / (IMG_SHAPE[0] // 2) / self.model_scale
             # x = np.round(x).astype('int')
-            # y = (y + IMG_SHAPE[1] // 6) * self.img_width / (IMG_SHAPE[1] * 4 / 3) / self.model_scale
-            y = y * self.img_width / IMG_SHAPE[1] / self.model_scale
+            y = (y + IMG_SHAPE[1] // 6) * self.img_width / (IMG_SHAPE[1] * 4 / 3) / self.model_scale
+            # y = y * self.img_width / IMG_SHAPE[1] / self.model_scale
             # y = np.round(y).astype('int')
             # return (x - r) ** 2 + (y - c) ** 2
             return max(0.2, (x - r) ** 2 + (y - c) ** 2) + max(0.4, slope_err)
@@ -317,7 +319,7 @@ class DataProcessing(Dataset):
     def extract_coords(self, prediction, flipped=False):
         logits = prediction[0]
         regr_output = prediction[1:]
-        points = np.argwhere(logits > 0.3)
+        points = np.argwhere(logits > 0.5)
         col_names = sorted(['x', 'y', 'z', 'yaw', 'pitch_sin', 'pitch_cos', 'roll'])
         coords = []
         for r, c in points:  # r, c is coordinate where logits is larger than 0

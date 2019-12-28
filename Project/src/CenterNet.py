@@ -27,6 +27,9 @@ class double_conv(nn.Module):
 
 
 class up(nn.Module):
+    """
+    Upsample x1 by 2 first, padding and then  concatenate with x2
+    """
     def __init__(self, in_ch, in_ch_2, out_ch, bilinear=True):
         super(up, self).__init__()
         if bilinear:
@@ -37,7 +40,7 @@ class up(nn.Module):
         self.conv = double_conv(in_ch + in_ch_2, out_ch)
 
     def forward(self, x1, x2=None):
-        x1 = self.up(x1)
+        x1 = self.up(x1)  # multiple by 2
         # input is CHW
         diffY = x2.size()[2] - x1.size()[2]
         diffX = x2.size()[3] - x1.size()[3]
@@ -62,8 +65,8 @@ class MyUNet(nn.Module):
         self._settings = settings
         self.device = self._settings.device
         #self.base_model = EfficientNet.from_pretrained('efficientnet-b0')
-        # self.base_model = models.resnext101_32x8d(pretrained=self._settings.pre_trained)
-        self.base_model = models.wide_resnet101_2(pretrained=self._settings.pre_trained)
+        self.base_model = models.resnext101_32x8d(pretrained=self._settings.pre_trained)
+        # self.base_model = models.wide_resnet101_2(pretrained=self._settings.pre_trained)
 
         self.conv0 = double_conv(5, 64)
         self.conv1 = double_conv(64, 128)
@@ -82,27 +85,28 @@ class MyUNet(nn.Module):
         batch_size = x.shape[0]
         mesh1 = self.get_mesh(batch_size, x.shape[2], x.shape[3])
         x0 = torch.cat([x, mesh1], 1)
-        x1 = self.mp(self.conv0(x0))
-        x2 = self.mp(self.conv1(x1))
-        x3 = self.mp(self.conv2(x2))
-        x4 = self.mp(self.conv3(x3))
+        x1 = self.mp(self.conv0(x0))  # shrink by 2
+        x2 = self.mp(self.conv1(x1))  # 4
+        x3 = self.mp(self.conv2(x2))  # 8
+        x4 = self.mp(self.conv3(x3))  # 16
 
         x_center = x[:, :, :, self._settings.img_width // 8: -self._settings.img_width // 8]
+        # x_center = x
         x_center_size = x_center.size()
         base_model = nn.Sequential(*list(self.base_model.children())[:-2])
         for param in base_model:
             param.requires_grad = not self._settings.pre_trained
         feats = base_model(x_center)
         # feats = self.base_model.extract_features(x_center)
-        # bg = torch.zeros([feats.shape[0], feats.shape[1], feats.shape[2], feats.shape[3] // 8]).to(self.device)
-        # feats = torch.cat([bg, feats, bg], 3)
+        bg = torch.zeros([feats.shape[0], feats.shape[1], feats.shape[2], feats.shape[3] // 8]).to(self.device)
+        feats = torch.cat([bg, feats, bg], 3)
 
         # Add positional info
         mesh2 = self.get_mesh(batch_size, feats.shape[2], feats.shape[3])
         feats = torch.cat([feats, mesh2], 1)
         x = self.up1(feats, x4)
         x = self.up2(x, x3)
-        x = self.outc(x)
+        x = self.outc(x)  # shape:[batch, channel, height, width]
         return x
 
     def get_mesh(self, batch_size, shape_x, shape_y):

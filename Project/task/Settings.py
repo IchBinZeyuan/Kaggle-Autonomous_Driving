@@ -6,7 +6,7 @@ device = 'cuda'
 
 epoch = 10
 
-img_width = 512
+img_width = 1024
 model_scale = 8
 distance_thresh_clear = 2
 data_agument = ['flip', 'blur', 'noise']
@@ -22,6 +22,6 @@ pre_trained = True
 lr = 5e-3
 lr_decay_epoch = 5
 reg_factor = 1e-3
-batch_size = 8
+batch_size = 2
 
 save_model = True

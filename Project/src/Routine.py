@@ -77,6 +77,8 @@ class Routine(object):
 
         predictions = []
         model.eval()
+
+        #        Run Test        #
         for img, _, _ in tqdm(test_loader):
             with torch.no_grad():
                 output = model(img.to(self.device))
@@ -123,13 +125,18 @@ class Routine(object):
         test_loader = DataLoader(dataset=test_dataset, batch_size=4, shuffle=False, num_workers=0)
         return df_train, df_dev, df_test, train_loader, dev_loader, test_loader, train_dataset, dev_dataset, test_dataset
 
-    def criterion(self, prediction, mask, regr, weight=0.4, size_average=True):
+    def criterion(self, prediction, mask, regr, weight=0.5, size_average=True):
         # Binary mask loss
         pred_mask = torch.sigmoid(prediction[:, 0])
-        mask_loss = mask * torch.log(pred_mask + 1e-12) + (1 - mask) * torch.log(1 - pred_mask + 1e-12)
+        # mask_loss = mask * torch.log(pred_mask + 1e-12) + (1 - mask) * torch.log(1 - pred_mask + 1e-12)
+
+        # Focal loss
+        gamma = 0.5
+        alpha = 0.5
+        mask_loss = mask * torch.log(pred_mask + 1e-12) * alpha * (1 - pred_mask) ** gamma + \
+                    (1 - mask) * torch.log(1 - pred_mask + 1e-12) * (1 - alpha) * pred_mask ** gamma
         mask_loss = -mask_loss.mean(0).sum()
         # Regression L1 loss
-        # todo: try l2 loss
         pred_regr = prediction[:, 1:]
         regr_loss = (torch.abs(pred_regr - regr).sum(1) * mask).sum(1).sum(1) / mask.sum(1).sum(1)
         regr_loss = regr_loss.mean(0)
