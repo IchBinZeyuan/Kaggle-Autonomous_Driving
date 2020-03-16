@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
-import torchvision.transforms as transforms
+from src.Hourglass import HourglassNet
 from efficientnet_pytorch import EfficientNet
 
 
@@ -64,9 +64,10 @@ class MyUNet(nn.Module):
         super(MyUNet, self).__init__()
         self._settings = settings
         self.device = self._settings.device
-        #self.base_model = EfficientNet.from_pretrained('efficientnet-b0')
-        self.base_model = models.resnext101_32x8d(pretrained=self._settings.pre_trained)
+        self.base_model = EfficientNet.from_pretrained('efficientnet-b0')
+        # self.base_model = models.resnext101_32x8d(pretrained=self._settings.pre_trained)
         # self.base_model = models.wide_resnet101_2(pretrained=self._settings.pre_trained)
+        # self.base_model = HourglassNet()
 
         self.conv0 = double_conv(5, 64)
         self.conv1 = double_conv(64, 128)
@@ -77,7 +78,8 @@ class MyUNet(nn.Module):
 
         # self.up1 = up(1282, 1024, 512, bilinear=False)
         # self.up1 = up(2050 + 1024, 512, bilinear=False)
-        self.up1 = up(2050, 1024, 512, bilinear=False)
+        # self.up1 = up(2050, 1024, 512, bilinear=False)
+        self.up1 = up(2306-1024, 1024, 512, bilinear=False)
         self.up2 = up(512, 512, 256, bilinear=False)
         self.outc = nn.Conv2d(256, n_classes, 1)
 
@@ -93,11 +95,12 @@ class MyUNet(nn.Module):
         x_center = x[:, :, :, self._settings.img_width // 8: -self._settings.img_width // 8]
         # x_center = x
         x_center_size = x_center.size()
-        base_model = nn.Sequential(*list(self.base_model.children())[:-2])
-        for param in base_model:
-            param.requires_grad = not self._settings.pre_trained
-        feats = base_model(x_center)
-        # feats = self.base_model.extract_features(x_center)
+        # base_model = nn.Sequential(*list(self.base_model.children())[:-2])
+        # for param in base_model:
+        #    param.requires_grad = not self._settings.pre_trained
+        # base_model = self.base_model
+        # feats = base_model(x_center)
+        feats = self.base_model.extract_features(x_center)
         bg = torch.zeros([feats.shape[0], feats.shape[1], feats.shape[2], feats.shape[3] // 8]).to(self.device)
         feats = torch.cat([bg, feats, bg], 3)
 

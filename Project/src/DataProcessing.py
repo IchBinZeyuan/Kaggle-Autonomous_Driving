@@ -49,10 +49,10 @@ class DataProcessing(Dataset):
         img0 = self.imread(img_name, is_color=True, fast_mode=True)
         mask = self.imread(mask_name, is_color=False, fast_mode=True)
         try:
-            imagemaskinv = cv2.bitwise_not(mask)
-            img = cv2.bitwise_and(img0, img0, mask=imagemaskinv)
+           imagemaskinv = cv2.bitwise_not(mask)
+           img = cv2.bitwise_and(img0, img0, mask=imagemaskinv)
         except:
-            img = img0
+           img = img0
         img, flip = self.preprocess_image(img, data_agument=self.data_agument)
 
         img = np.rollaxis(img, 2, 0)
@@ -137,7 +137,7 @@ class DataProcessing(Dataset):
             heatmap = np.array(heatmap[:, ::-1])
             regr = np.array(regr[:, ::-1])
             mask = np.array(mask[:, ::-1])
-        return heatmap, regr
+        return mask, regr
 
     @staticmethod
     def str2coords(s, names=['id', 'yaw', 'pitch', 'roll', 'x', 'y', 'z']):
@@ -283,9 +283,9 @@ class DataProcessing(Dataset):
         return x * fx / z + cx, y * fy / z + cy
 
     def optimize_xy(self, r, c, x0, y0, z0, flipped=False):
+        img = self.imread(self.path + 'train_images/ID_8a6e65317' + '.jpg')
+        IMG_SHAPE = img.shape
         def distance_fn(xyz):
-            img = self.imread(self.path + 'train_images/ID_8a6e65317' + '.jpg')
-            IMG_SHAPE = img.shape
             x, y, z = xyz
             xx = -x if flipped else x
             slope_err = (self.xzy_slope.predict([[xx, z]])[0] - y) ** 2
@@ -295,12 +295,10 @@ class DataProcessing(Dataset):
             # x = np.round(x).astype('int')
             y = (y + IMG_SHAPE[1] // 6) * self.img_width / (IMG_SHAPE[1] * 4 / 3) / self.model_scale
             # y = y * self.img_width / IMG_SHAPE[1] / self.model_scale
-            # y = np.round(y).astype('int')
-            # return (x - r) ** 2 + (y - c) ** 2
             return max(0.2, (x - r) ** 2 + (y - c) ** 2) + max(0.4, slope_err)
         # print(colored('Finding Minimize.....', 'red'))
-        # res = minimize(distance_fn, [x0, y0, z0], method='Powell')
         res = minimize(distance_fn, [x0, y0, z0], method='Powell')
+        # res = minimize(distance_fn, [x0, y0, z0])
         # print(colored('Minimization Done!', 'red'))
         x_new, y_new, z_new = res.x
         return x_new, y_new, z_new
@@ -319,7 +317,7 @@ class DataProcessing(Dataset):
     def extract_coords(self, prediction, flipped=False):
         logits = prediction[0]
         regr_output = prediction[1:]
-        points = np.argwhere(logits > 0.5)
+        points = np.argwhere(logits > 0)
         col_names = sorted(['x', 'y', 'z', 'yaw', 'pitch_sin', 'pitch_cos', 'roll'])
         coords = []
         for r, c in points:  # r, c is coordinate where logits is larger than 0

@@ -50,7 +50,7 @@ class Routine(object):
 
         model = self.Model(8, self._settings).to(self.device)
         optimizer = optim.Adam(model.parameters(), lr=self._settings.lr, weight_decay=self._settings.reg_factor)
-        exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=self._settings.lr_decay_epoch * len(train_loader), gamma=0.1)
+        exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=self._settings.lr_decay_epoch * len(train_loader), gamma=0.25)
 
         history = pd.DataFrame()
         for epoch in range(self._settings.epoch):
@@ -125,7 +125,7 @@ class Routine(object):
         test_loader = DataLoader(dataset=test_dataset, batch_size=4, shuffle=False, num_workers=0)
         return df_train, df_dev, df_test, train_loader, dev_loader, test_loader, train_dataset, dev_dataset, test_dataset
 
-    def criterion(self, prediction, mask, regr, weight=0.5, size_average=True):
+    def criterion(self, prediction, mask, regr, weight=0.4, size_average=True):
         # Binary mask loss
         pred_mask = torch.sigmoid(prediction[:, 0])
         # mask_loss = mask * torch.log(pred_mask + 1e-12) + (1 - mask) * torch.log(1 - pred_mask + 1e-12)
@@ -133,9 +133,13 @@ class Routine(object):
         # Focal loss
         gamma = 0.5
         alpha = 0.5
-        mask_loss = mask * torch.log(pred_mask + 1e-12) * alpha * (1 - pred_mask) ** gamma + \
-                    (1 - mask) * torch.log(1 - pred_mask + 1e-12) * (1 - alpha) * pred_mask ** gamma
-        mask_loss = -mask_loss.mean(0).sum()
+        if self._settings.focal_loss:
+        # mask_loss = mask * torch.log(pred_mask + 1e-12) * alpha * (1 - pred_mask) ** gamma + \
+        #            (1 - mask) * torch.log(1 - pred_mask + 1e-12) * (1 - alpha) * pred_mask ** gamma
+            mask_loss = self.focal_loss(pred_mask, mask)
+        else:
+            mask_loss = mask * torch.log(pred_mask + 1e-12) + (1 - mask) * torch.log(1 - pred_mask + 1e-12)
+            mask_loss = -mask_loss.mean(0).sum()
         # Regression L1 loss
         pred_regr = prediction[:, 1:]
         regr_loss = (torch.abs(pred_regr - regr).sum(1) * mask).sum(1).sum(1) / mask.sum(1).sum(1)
@@ -155,7 +159,7 @@ class Routine(object):
             regr_batch = regr_batch.to(self.device)
             optimizer.zero_grad()
             output = model(img_batch)
-            loss = self.criterion(output, mask_batch, regr_batch)
+            loss = self.criterion(output, mask_batch, regr_batch, size_average=False)
             total_loss += loss.data
             if history is not None:
                 history.loc[epoch + batch_idx / len(train_loader), 'train_loss'] = loss.data.cpu().numpy()
@@ -326,3 +330,33 @@ class Routine(object):
         os.makedirs(repository_name)
         return repository_name
 
+    def focal_loss(self, pred, gt):
+        '''
+            gt是原来的值
+            Modified focal loss. Exactly the same as CornerNet.
+            Runs faster and costs a little bit more memory
+            Arguments:
+            pred (batch x c x h x w)
+            gt_regr (batch x c x h x w)
+        '''
+        # 直接判断是不是1
+        pos_inds = gt.eq(1).float()
+        # 直接判断是不是小于
+        neg_inds = gt.lt(1).float()
+
+        neg_weights = torch.pow(1 - gt, 4)
+
+        loss = 0
+
+        pos_loss = torch.log(pred + 1e-12) * torch.pow(1 - pred, 2) * pos_inds
+        neg_loss = torch.log(1 - pred + 1e-12) * torch.pow(pred, 2) * neg_weights * neg_inds
+
+        num_pos = pos_inds.float().sum()
+        pos_loss = pos_loss.sum()
+        neg_loss = neg_loss.sum()
+        # 假如加起来等于0 ，也就是说全都不等于1
+        if num_pos == 0:
+            loss = loss - neg_loss
+        else:
+            loss = loss - (pos_loss + neg_loss) / num_pos
+        return loss
