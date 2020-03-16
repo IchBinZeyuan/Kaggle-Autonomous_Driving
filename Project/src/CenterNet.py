@@ -75,7 +75,6 @@ class MyUNet(nn.Module):
         self.conv3 = double_conv(512, 1024)
 
         self.mp = nn.MaxPool2d(2)
-
         # self.up1 = up(1282, 1024, 512, bilinear=False)
         # self.up1 = up(2050 + 1024, 512, bilinear=False)
         # self.up1 = up(2050, 1024, 512, bilinear=False)
@@ -106,7 +105,6 @@ class MyUNet(nn.Module):
 
         # Add positional info
         mesh2 = self.get_mesh(batch_size, feats.shape[2], feats.shape[3])
-        feats = torch.cat([feats, mesh2], 1)
         x = self.up1(feats, x4)
         x = self.up2(x, x3)
         x = self.outc(x)  # shape:[batch, channel, height, width]

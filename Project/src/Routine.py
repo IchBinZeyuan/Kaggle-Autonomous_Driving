@@ -17,7 +17,6 @@ import os
 from datetime import datetime
 import cv2
 
-
 class Routine(object):
     def __init__(self, settings, model):
         self._settings = settings
@@ -51,7 +50,6 @@ class Routine(object):
         model = self.Model(8, self._settings).to(self.device)
         optimizer = optim.Adam(model.parameters(), lr=self._settings.lr, weight_decay=self._settings.reg_factor)
         exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=self._settings.lr_decay_epoch * len(train_loader), gamma=0.25)
-
         history = pd.DataFrame()
         for epoch in range(self._settings.epoch):
             self.train_model(optimizer, model, exp_lr_scheduler, epoch, train_loader, history)
@@ -144,6 +142,7 @@ class Routine(object):
         pred_regr = prediction[:, 1:]
         regr_loss = (torch.abs(pred_regr - regr).sum(1) * mask).sum(1).sum(1) / mask.sum(1).sum(1)
         regr_loss = regr_loss.mean(0)
+
         # Sum
         loss = weight * mask_loss + (1 - weight) * regr_loss
         if not size_average:

@@ -1,4 +1,5 @@
 /Project/venv/
+<<<<<<< HEAD
 /Project/task/model.pth
 venv/
 .venv
@@ -6,3 +7,5 @@ venv/
 .DS_Store
 __init__.py
 __pycache__/
+=======
+>>>>>>> b3b4e54ec26befba4553c393a79c43c299f88398
